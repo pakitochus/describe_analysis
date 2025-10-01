@@ -47,4 +47,4 @@ The goal of this project is to model disease progression across different varian
 ## Citation
 
 If you use this code or analysis, please cite:
-*Francisco J. Martinez-Murcia – Longitudinal LME analysis of the DESCRIBE dataset.*
+*CITE OF THE PAPER*
