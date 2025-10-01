@@ -1,0 +1,2066 @@
+---
+title: Longitudinal LME analysis of the DESCRIBE dataset
+author: Francisco J. Martinez-Murcia
+date: '\today{}'
+output:
+  pdf_document:
+    toc: 'yes'
+    toc_depth: 3
+    latex_engine: xelatex
+    df_print: tibble
+  'bookdown::pdf_document2': default
+  'bookdown::html_document2': default
+  html_notebook: default
+  word_document:
+    toc: 'yes'
+    toc_depth: '2'
+format:
+  docx:
+    toc: true
+    number-sections: true
+    highlight-style: github
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+# TASKS:
+
+-   9 vs 1X
+-   each group independently
+-   9, 10, 12, 11+13,
+
+9: behavioural variant of FTD 10: PPA not specified 11: non-fluent
+variant of PPA 12: logopenic variant of PPA 13: semantic variant of PPA
+
+## Names: 
+9 : bvFTD - behavioural variant of FTD 
+10: nsPPA - PPA not specified 
+11: nfPPA - non-fluent variant of PPA 
+12: lvPPA - logopenic variant of PPA 
+13: svPPA - semantic variant of PPA
+
+## PCA clusters
+
+-   active_behav: sympathicotonic
+
+-   passive_behav: vagotonic
+
+-   affective: affective symptoms
+
+-   psychotic: psychotic symptoms
+
+# Fitting Linear Mixed Effects to the data: 4 component model.
+
+This is the **LME** analysis of the symptoms of the DESCRIBE dataset,
+using groups of symptoms as defined by the PCA rotated model. To do so,
+we first import the data. Note that we are only considering the
+*sum\_{i}*, with $i=1,...4$ (in the 4-scores model) as response
+variables, that correspond respectively to X phenotypes. Also, we are
+including just Estimated Years to Onset (EYO), Family, Mutation Type
+(Group), Gender and name of the acquisition site (blinded.site):
+
+```{r}
+library(kableExtra)
+library(dplyr)
+options(encoding="UTF-8")
+options(huxtable.knitr_output_format='md')
+describe_long <- readxl::read_excel('Describe.xlsx')
+d <- describe_long[c('Site',	'Visit', 'onset',	'MMSE',	'NPI', 'sum1','sum2','sum3', 'sum4')]
+
+d$Age <- describe_long$`age at visit`
+d$Code <- factor(describe_long$Pseudonym)
+d$EYO <- describe_long$`years since onset`
+d$Education <- describe_long$`years of education`
+d$Gender <- factor(describe_long$Sex)
+d$Site <- factor(d$Site)
+d$BinGroup[describe_long$diagnosis<10] <- "bvFTD"
+d$BinGroup[describe_long$diagnosis>=10] <- "PPA" 
+d$BinGroup <- factor(d$BinGroup, levels=c('PPA', 'bvFTD'))
+d$active_behav <- describe_long$sum1
+d$passive_behav <- describe_long$sum2
+d$affective <- describe_long$sum3
+d$psychotic <- describe_long$sum4
+
+
+d$Group[describe_long$diagnosis == 9] <- "bvFTD"
+d$Group[describe_long$diagnosis == 10] <- "nsPPA"
+d$Group[describe_long$diagnosis == 11] <- "nfPPA"
+d$Group[describe_long$diagnosis == 12] <- "lvPPA"
+d$Group[describe_long$diagnosis == 13] <- "svPPA"
+d$Group <- factor(d$Group)
+
+# Clean
+d <- d %>%
+    group_by(Code) %>%
+    mutate(EYO = Age - first(onset)) 
+d <- d %>%
+    group_by(Code) %>%
+    mutate(Education = first(Education)) 
+d <- d[!is.na(d$active_behav),]
+d <- d[!is.na(d$EYO),] # remove all that have not onset registered.
+summary(d)
+```
+
+We display the distribution of the factor loadings for each subject over
+EYO:
+
+```{r}
+library(lattice)
+xyplot( active_behav + passive_behav + affective +psychotic  ~ EYO, groups=Group,
+       d, aspect= "1.5", layout=c(4,1), type = c("g", "p", "r"),
+             index.cond = function(x,y) coef(lm(y ~ x))[1],
+             xlab = "EYO",
+             ylab = "Sum of Scores")
+```
+
+```{r}
+library(tidyverse)
+
+data <- d %>%
+  group_by(Code) %>%
+  filter(any(Visit==1)) %>%
+  mutate_at(vars(starts_with("sum")), ~ . - .[Visit == 1]) %>%
+  ungroup()
+
+# plot spaghetti plot
+ggplot(data, aes(x = Visit, y = active_behav, color = as.factor(Code))) +
+    geom_line() +
+    scale_color_discrete(name = "Subject") + 
+    geom_smooth(se=FALSE, colour="black", size=2) +
+    guides(color = FALSE) +
+    labs(x = "Visit", y = "active_behav difference from baseline")
+```
+
+We first try the simpler model, with only one term depending on EYO, in
+which the data is: $$ y = \alpha + \beta_1 EYO + \beta_2 Group + b_1$$
+with $b_i = \mu_i$, are the random effects, one intercept per family, as
+in the paper.
+
+# Active behavioral phenotype
+
+## Binary - bvFTD vs REST:
+
+We first build and check the baseline model:
+
+```{r Fig1, echo=TRUE, fig.height=10, fig.width=5}
+library(lme4)
+library(car)
+library(performance)
+library(jtools)
+sc1.bm0 <- lmer(active_behav ~ 1 + EYO*BinGroup + (1|Code), data=d)
+summ(sc1.bm0)
+model_performance(sc1.bm0)
+check_model(sc1.bm0)
+```
+
+```{r}
+library(interactions)
+library(ggplot2)
+sc1.bm0 <- lmer(active_behav ~ 1 + EYO + BinGroup + (1|Code), data=d)
+summ(sc1.bm0)
+qqPlot(resid(sc1.bm0))
+Anova(sc1.bm0)
+interact_plot(sc1.bm0, pred=EYO, modx=BinGroup, data=d, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r}
+sc1.bm1 <- lmer(active_behav ~ 1 + EYO*BinGroup + (1|Code), data=d)
+summ(sc1.bm1)
+qqPlot(resid(sc1.bm1))
+anova(sc1.bm0, sc1.bm1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc1.bm2 <- lmer(active_behav ~ 1 + EYO + BinGroup + Gender + (1|Code), data=d)
+summ(sc1.bm2)
+qqPlot(resid(sc1.bm2))
+model_performance(sc1.bm2)
+check_model(sc1.bm2)
+```
+
+```{r}
+anova(sc1.bm0, sc1.bm2)
+Anova(sc1.bm2)
+interact_plot(sc1.bm2, pred=EYO, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc1.bm3 <- lmer(active_behav ~ 1 + EYO + BinGroup + Gender*EYO + (1|Code), data=d)
+summary(sc1.bm3)
+#model_performance(sc1.bm2)
+check_model(sc1.bm3)
+```
+
+```{r}
+anova(sc1.bm2, sc1.bm3)
+Anova(sc1.bm3)
+interact_plot(sc1.bm3, pred=EYO, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Active Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc1.bm4 <- lmer(active_behav ~ 1 + BinGroup*Gender + Gender*EYO + (1|Code), data=d)
+summary(sc1.bm4)
+#model_performance(sc1.bm2)
+check_model(sc1.bm4)
+```
+
+```{r}
+anova(sc1.bm3, sc1.bm4)
+Anova(sc1.bm4)
+interact_plot(sc1.bm4, pred=EYO, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Active Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+Including the random effect of site doesn't change anything.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+#sc1.bm5 <- lmer(active_behav ~ 1 + BinGroup*Gender + Gender*EYO + (1|Code) +(1|Site), data=d)
+sc1.bm5 <- lmer(active_behav ~ 1 + EYO + BinGroup + Gender + (1|Code) +(1|Site), data=d)
+
+summary(sc1.bm5)
+#model_performance(sc1.bm2)
+check_model(sc1.bm5)
+```
+
+```{r}
+anova(sc1.bm2, sc1.bm5)
+Anova(sc1.bm5)
+interact_plot(sc1.bm5, pred=EYO, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Active Behavioural Phenotype', rug=TRUE, jitter=1)
+
+```
+
+Education doesn't have any effect (neither over sc1.bm2 or sc1.bm4
+refitted).
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+#sc1.bm5 <- lmer(active_behav ~ 1 + BinGroup*Gender + Gender*EYO + (1|Code) +(1|Site), data=d)
+dred.educ <- d[!is.na(d$Education),]
+sc1.bm2.refit <- lmer(active_behav ~ 1 + EYO + BinGroup + Gender + (1|Code) , data=dred.educ)
+sc1.bm6 <- lmer(active_behav ~ 1 + EYO + BinGroup + Gender + Education + (1|Code) , data=dred.educ)
+
+summary(sc1.bm6)
+#model_performance(sc1.bm2)
+check_model(sc1.bm6)
+```
+
+```{r}
+
+anova(sc1.bm2.refit, sc1.bm6)
+Anova(sc1.bm6)
+interact_plot(sc1.bm6, pred=EYO, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Active Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+MMSE have a weak effect (p\<0.1), but it relies on dropping more than
+100 patients from the analysis, so we chose not to include MMSE.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+#sc1.bm5 <- lmer(active_behav ~ 1 + BinGroup*Gender + Gender*EYO + (1|Code) +(1|Site), data=d)
+dred.mmse <- d[!is.na(d$MMSE),]
+sc1.bm2.refit <- lmer(active_behav ~ 1 +  EYO + BinGroup +Gender + (1|Code) , data=dred.mmse)
+sc1.bm7 <- lmer(active_behav ~ 1 +   EYO + BinGroup +Gender + MMSE + (1|Code) , data=dred.mmse)
+
+summary(sc1.bm7)
+#model_performance(sc1.bm2)
+check_model(sc1.bm7)
+```
+
+```{r}
+
+anova(sc1.bm2.refit, sc1.bm7)
+Anova(sc1.bm7)
+interact_plot(sc1.bm7, pred=MMSE, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Active Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+Let's see what happens if we use Age instead of EYO.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+
+sc1.bm8 <- lmer(active_behav ~ 1 +   Age + BinGroup +Gender + (1|Code) , data=d)
+
+summary(sc1.bm8)
+#model_performance(sc1.bm2)
+check_model(sc1.bm8)
+```
+
+```{r}
+anova(sc1.bm2, sc1.bm8)
+Anova(sc1.bm8)
+interact_plot(sc1.bm8, pred=Age, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=TRUE, y.label="Affective Behavioural Phenotype")
+
+```
+
+```{r}
+library(car)
+library(jtools)
+anova(sc1.bm2, sc1.bm4)
+plot_summs(sc1.bm0, sc1.bm1, sc1.bm2, sc1.bm3, sc1.bm4, 
+             error_format = "[{conf.low}, {conf.high}]")
+export_summs(sc1.bm0, sc1.bm1, sc1.bm2, sc1.bm3, sc1.bm4,  model.names=c('sc1.bm0', 'sc1.bm1', 'sc1.bm2', 'sc1.bm3', 'sc1.bm4'),
+             error_format = "[{conf.low}, {conf.high}]")
+```
+
+IN order to focus better, just compare fm2 and fm4
+
+```{r}
+plot_summs(sc1.bm2, sc1.bm4, 
+             error_format = "[{conf.low}, {conf.high}]")
+export_summs(sc1.bm2, sc1.bm4,  model.names=c('sc1.bm2', 'sc1.bm4'),
+             error_format = "[{conf.low}, {conf.high}]")
+```
+
+## Three Grous - bvFTD vs nfPPA+svPPA vs lvPPA:
+
+```{r}
+library(dplyr)
+dataTer = d[d$Group!="nsPPA",]
+dataTer <- dataTer %>%
+  mutate(TerGroup = case_when(
+    Group == "bvFTD" ~ 'bvFTD',
+    Group %in% c('nfPPA', 'svPPA') ~ 'PPA-FTD',
+    Group == 'lvPPA' ~ 'lvPPA'
+  ))
+dataTer$TerGroup <- factor(dataTer$TerGroup)
+summary(dataTer)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+library(lme4)
+library(car)
+library(performance)
+sc1.fm0 <- lmer(active_behav ~ 1 + EYO + (1|Code), data=dataTer)
+summary(sc1.fm0)
+model_performance(sc1.fm0)
+check_model(sc1.fm0)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc1.fm1 <- lmer(active_behav ~ 1 + EYO + TerGroup + (1|Code), data=dataTer)
+summary(sc1.fm1)
+model_performance(sc1.fm1)
+anova(sc1.fm0, sc1.fm1)
+check_model(sc1.fm1)
+```
+
+```{r}
+
+Anova(sc1.fm1)
+interact_plot(sc1.fm1, pred=EYO, modx=TerGroup, data=dataTer, interval=TRUE, plot.points=TRUE, y.label='Affecttive Behavioural Phenotype')
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc1.fm2 <- lmer(active_behav ~ 1 + EYO*TerGroup + (1|Code), data=dataTer)
+summary(sc1.fm2)
+model_performance(sc1.fm2)
+anova(sc1.fm1, sc1.fm2)
+check_model(sc1.fm2)
+```
+
+```{r}
+Anova(sc1.fm2)
+interact_plot(sc1.fm2, pred=EYO, modx=TerGroup, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, rug.data=dataTer$TerGroup)
+
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+
+sc1.fm3 <- lmer(active_behav ~ 1 + EYO + TerGroup + Gender + (1|Code), data=dataTer)
+summary(sc1.fm3)
+model_performance(sc1.fm3)
+anova(sc1.fm1, sc1.fm3)
+check_model(sc1.fm3)
+```
+
+```{r}
+Anova(sc1.fm3)
+interact_plot(sc1.fm3, pred=EYO, modx=TerGroup, mod2=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+Now interactions:
+
+```{r}
+sc1.fm4 <- lmer(active_behav ~ 1 + EYO + TerGroup*Gender + (1|Code), data=dataTer)
+sc1.fm5 <- lmer(active_behav ~ 1 + EYO*Gender + TerGroup + (1|Code), data=dataTer)
+sc1.fm6 <- lmer(active_behav ~ 1 + EYO*Gender + TerGroup*Gender + (1|Code), data=dataTer)
+summary(sc1.fm4)
+summary(sc1.fm5)
+summary(sc1.fm6)
+#model_performance(sc1.fm4)
+anova(sc1.fm3, sc1.fm4)
+anova(sc1.fm3, sc1.fm5)
+anova(sc1.fm4, sc1.fm5)
+anova(sc1.fm4, sc1.fm6)
+anova(sc1.fm5, sc1.fm6)
+#check_model(sc1.fm4)
+Anova(sc1.fm4)
+Anova(sc1.fm5)
+Anova(sc1.fm6)
+interact_plot(sc1.fm4, pred=EYO, modx=TerGroup, mod2=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+interact_plot(sc1.fm5, pred=EYO, modx=TerGroup, mod2=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+interact_plot(sc1.fm6, pred=EYO, modx=TerGroup, mod2=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+LEt's add covariates. is Site a random effect?
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc1.fm5 <- lmer(active_behav ~ 1 + EYO + TerGroup*Gender + (1|Code) + (1|Site), data=dataTer)
+summary(sc1.fm5)
+model_performance(sc1.fm5)
+anova(sc1.fm4, sc1.fm5)
+check_model(sc1.fm5)
+```
+
+```{r}
+Anova(sc1.fm5)
+interact_plot(sc1.fm5, pred=EYO, modx=TerGroup, mod2=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+Site is not a random effect. Let's add education years. Not significant
+at all.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+dataTer.educ <- dataTer[!is.na(dataTer$Education),]
+sc1.fm4.refitted <- lmer(active_behav ~ 1 + EYO + TerGroup*Gender + (1|Code), data=dataTer.educ)
+sc1.fm6 <- lmer(active_behav ~ 1 + EYO + TerGroup*Gender + Education + (1|Code), data=dataTer.educ)
+summary(sc1.fm6)
+model_performance(sc1.fm6)
+anova(sc1.fm4.refitted, sc1.fm6)
+check_model(sc1.fm6)
+```
+
+```{r}
+Anova(sc1.fm6)
+interact_plot(sc1.fm6, pred=EYO, modx=TerGroup, mod2=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+Site is not a random effect. Let's add MMSE years. Not significant at
+all.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+dataTer.mmse <- dataTer[!is.na(dataTer$MMSE),]
+sc1.fm4.refitted <- lmer(active_behav ~ 1 + EYO + TerGroup*Gender + (1|Code), data=dataTer.mmse)
+sc1.fm7 <- lmer(active_behav ~ 1 + EYO + TerGroup*Gender + MMSE + (1|Code), data=dataTer.mmse)
+summary(sc1.fm7)
+model_performance(sc1.fm7)
+anova(sc1.fm4.refitted, sc1.fm7)
+check_model(sc1.fm7)
+```
+
+```{r}
+Anova(sc1.fm7)
+interact_plot(sc1.fm7, pred=MMSE, modx=TerGroup, mod2=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r}
+library(car)
+library(jtools)
+anova(sc1.fm2, sc1.fm4)
+plot_summs(sc1.fm0, sc1.fm1, sc1.fm2, sc1.fm3, sc1.fm4, 
+             error_format = "[{conf.low}, {conf.high}]")
+export_summs(sc1.fm0, sc1.fm1, sc1.fm2, sc1.fm3, sc1.fm4,  model.names=c('sc1.fm0', 'sc1.fm1', 'sc1.fm2', 'sc1.fm3', 'sc1.fm4'),
+             error_format = "[{conf.low}, {conf.high}]")
+```
+
+## Four Groups - bvFTD vs lvPPA vs nfPPA vs svPPA:
+
+```{r}
+library(dplyr)
+dataQuad = d[d$Group!='nsPPA',]
+dataQuad$QuadGroup <- factor(dataQuad$Group)
+summary(dataQuad)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+library(lme4)
+library(car)
+library(performance)
+sc1.fm0 <- lmer(active_behav ~ 1 + EYO + (1|Code), data=dataQuad)
+summary(sc1.fm0)
+model_performance(sc1.fm0)
+check_model(sc1.fm0)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc1.fm1 <- lmer(active_behav ~ 1 + EYO + QuadGroup + (1|Code), data=dataQuad)
+summary(sc1.fm1)
+model_performance(sc1.fm1)
+anova(sc1.fm0, sc1.fm1)
+check_model(sc1.fm1)
+```
+
+```{r}
+Anova(sc1.fm1)
+interact_plot(sc1.fm1, pred=EYO, modx=QuadGroup, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc1.fm2 <- lmer(active_behav ~ 1 + EYO*QuadGroup + (1|Code), data=dataQuad)
+summary(sc1.fm2)
+model_performance(sc1.fm2)
+anova(sc1.fm1, sc1.fm2)
+check_model(sc1.fm2)
+```
+
+```{r}
+Anova(sc1.fm2)
+interact_plot(sc1.fm2, pred=EYO, modx=QuadGroup, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc1.fm3 <- lmer(active_behav ~ 1 + EYO + QuadGroup + Gender + (1|Code), data=dataQuad)
+summary(sc1.fm3)
+model_performance(sc1.fm3)
+anova(sc1.fm1, sc1.fm3)
+check_model(sc1.fm3)
+```
+
+```{r}
+Anova(sc1.fm3)
+interact_plot(sc1.fm3, pred=EYO, modx=QuadGroup, mod2=Gender, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+
+```{r}
+sc1.fm4 <- lmer(active_behav ~ 1 + EYO + QuadGroup:Gender + QuadGroup + Gender + (1|Code), data=dataQuad)
+sc1.fm5 <- lmer(active_behav ~ 1 + EYO*Gender + QuadGroup + (1|Code), data=dataQuad)
+sc1.fm6 <- lmer(active_behav ~ 1 + EYO + QuadGroup:Gender + QuadGroup + Gender + EYO:Gender + (1|Code), data=dataQuad)
+summary(sc1.fm4)
+summary(sc1.fm5)
+summary(sc1.fm6)
+#model_performance(sc1.fm4)
+anova(sc1.fm3, sc1.fm4)
+anova(sc1.fm3, sc1.fm5)
+anova(sc1.fm4, sc1.fm5)
+anova(sc1.fm4, sc1.fm6)
+anova(sc1.fm5, sc1.fm6)
+#check_model(sc1.fm4)
+Anova(sc1.fm4)
+Anova(sc1.fm5)
+Anova(sc1.fm6)
+interact_plot(sc1.fm4, pred=EYO, modx=QuadGroup, mod2=Gender, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+interact_plot(sc1.fm5, pred=EYO, modx=QuadGroup, mod2=Gender, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+interact_plot(sc1.fm6, pred=EYO, modx=QuadGroup, mod2=Gender, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+LEt's add covariates. is Site a random effect?
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc1.fm5 <- lmer(active_behav ~ 1 + EYO + QuadGroup*Gender + (1|Code) + (1|Site), data=dataQuad)
+summary(sc1.fm5)
+model_performance(sc1.fm5)
+anova(sc1.fm4, sc1.fm5)
+check_model(sc1.fm5)
+```
+
+```{r}
+Anova(sc1.fm5)
+interact_plot(sc1.fm5, pred=EYO, modx=QuadGroup, mod2=Gender, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+Site is not a random effect. Let's add education years. Not significant
+at all.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+dataQuad.educ <- dataQuad[!is.na(dataQuad$Education),]
+sc1.fm6.refitted <- lmer(active_behav ~ 1 + EYO*Gender + QuadGroup*Gender + (1|Code), data=dataQuad.educ)
+sc1.fm7 <- lmer(active_behav ~ 1 + EYO*Gender + QuadGroup*Gender + Education + (1|Code), data=dataQuad.educ)
+summary(sc1.fm7)
+model_performance(sc1.fm7)
+anova(sc1.fm6.refitted, sc1.fm7)
+check_model(sc1.fm7)
+```
+
+```{r}
+Anova(sc1.fm7)
+interact_plot(sc1.fm7, pred=EYO, modx=QuadGroup, mod2=Gender, data=dataQuad.educ, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+Site is not a random effect. Let's add MMSE years. Not significant at
+all.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+dataQuad.mmse <- dataQuad[!is.na(dataQuad$MMSE),]
+sc1.fm6.refitted <- lmer(active_behav ~ 1 + EYO*Gender + QuadGroup*Gender + (1|Code), data=dataQuad.mmse)
+sc1.fm8 <- lmer(active_behav ~ 1 + EYO*Gender + QuadGroup*Gender + MMSE + (1|Code), data=dataQuad.mmse)
+summary(sc1.fm8)
+model_performance(sc1.fm8)
+anova(sc1.fm6.refitted, sc1.fm8)
+check_model(sc1.fm8)
+```
+
+```{r}
+Anova(sc1.fm8)
+interact_plot(sc1.fm8, pred=MMSE, modx=QuadGroup, mod2=Gender, data=dataQuad.mmse, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r}
+library(car)
+library(jtools)
+plot_summs(sc1.fm0, sc1.fm1, sc1.fm2, sc1.fm3, sc1.fm4, sc1.fm5, sc1.fm6, 
+             error_format = "[{conf.low}, {conf.high}]")
+export_summs(sc1.fm0, sc1.fm1, sc1.fm2, sc1.fm3, sc1.fm4, sc1.fm5, sc1.fm6,  model.names=c('sc1.fm0', 'sc1.fm1', 'sc1.fm2', 'sc1.fm3', 'sc1.fm4', 'sc1.fm5', 'sc1.fm6'),
+             error_format = "[{conf.low}, {conf.high}]")
+```
+
+To have a clearer view, compare just sc1.fm4 and sc1.fm6.
+
+```{r}
+library(car)
+library(jtools)
+plot_summs(sc1.fm4, sc1.fm6, 
+             error_format = "[{conf.low}, {conf.high}]")
+export_summs(sc1.fm4, sc1.fm6,  model.names=c('sc1.fm4','sc1.fm6'),
+             error_format = "[{conf.low}, {conf.high}]")
+Anova(sc1.fm6)
+```
+
+# Passive Behavioural Phenotype
+
+## Binary - bvFTD vs REST:
+
+We first build and check the baseline model:
+
+```{r Fig2, echo=TRUE, fig.height=10, fig.width=5}
+library(lme4)
+library(car)
+library(performance)
+sc2.bm0 <- lmer(passive_behav ~ 1 + EYO + BinGroup + (1|Code), data=d)
+summary(sc2.bm0)
+model_performance(sc2.bm0)
+check_model(sc2.bm0)
+```
+
+```{r}
+library(interactions)
+library(ggplot2)
+sc2.bm0 <- lmer(passive_behav ~ 1 + EYO + BinGroup + (1|Code), data=d)
+summary(sc2.bm0)
+qqPlot(resid(sc2.bm0))
+Anova(sc2.bm0)
+interact_plot(sc2.bm0, pred=EYO, modx=BinGroup, data=d, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r}
+sc2.bm1 <- lmer(passive_behav ~ 1 + EYO*BinGroup + (1|Code), data=d)
+qqPlot(resid(sc2.bm1))
+anova(sc2.bm0, sc2.bm1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc2.bm2 <- lmer(passive_behav ~ 1 + EYO + BinGroup + Gender + (1|Code), data=d)
+summary(sc2.bm2)
+qqPlot(resid(sc2.bm2))
+model_performance(sc2.bm2)
+check_model(sc2.bm2)
+```
+
+```{r}
+anova(sc2.bm0, sc2.bm2)
+Anova(sc2.bm2)
+interact_plot(sc2.bm2, pred=EYO, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc2.bm3 <- lmer(passive_behav ~ 1 + EYO + BinGroup + Gender*EYO + (1|Code), data=d)
+summary(sc2.bm3)
+#model_performance(sc2.bm2)
+check_model(sc2.bm3)
+```
+
+```{r}
+anova(sc2.bm0, sc2.bm3)
+Anova(sc2.bm3)
+interact_plot(sc2.bm3, pred=EYO, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc2.bm4 <- lmer(passive_behav ~ 1 + BinGroup*Gender + Gender*EYO + (1|Code), data=d)
+summary(sc2.bm4)
+#model_performance(sc2.bm2)
+check_model(sc2.bm4)
+```
+
+```{r}
+anova(sc2.bm0, sc2.bm4)
+Anova(sc2.bm4)
+interact_plot(sc2.bm4, pred=EYO, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+Including the random effect of site doesn't change anything.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+#sc2.bm5 <- lmer(passive_behav ~ 1 + BinGroup*Gender + Gender*EYO + (1|Code) +(1|Site), data=d)
+sc2.bm5 <- lmer(passive_behav ~ 1 + EYO + BinGroup + Gender + (1|Code) +(1|Site), data=d)
+
+summary(sc2.bm5)
+#model_performance(sc2.bm2)
+check_model(sc2.bm5)
+```
+
+```{r}
+anova(sc2.bm0, sc2.bm5)
+Anova(sc2.bm5)
+interact_plot(sc2.bm5, pred=EYO, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+Education doesn't have any effect (neither over sc2.bm0 or sc2.bm0
+refitted).
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+#sc2.bm5 <- lmer(passive_behav ~ 1 + BinGroup*Gender + Gender*EYO + (1|Code) +(1|Site), data=d)
+dred.educ <- d[!is.na(d$Education),]
+sc2.bm0.refit <- lmer(passive_behav ~ 1 + EYO + BinGroup + (1|Code), data=dred.educ)
+sc2.bm6 <- lmer(passive_behav ~ 1 + EYO + BinGroup + Education + (1|Code) , data=dred.educ)
+
+summary(sc2.bm6)
+#model_performance(sc2.bm2)
+check_model(sc2.bm6)
+```
+
+```{r}
+anova(sc2.bm0.refit, sc2.bm6)
+Anova(sc2.bm6)
+interact_plot(sc2.bm6, pred=EYO, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+MMSE have a weak effect (p\<0.1), but it relies on dropping more than
+100 patients from the analysis, so we chose not to include MMSE.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+#sc2.bm5 <- lmer(passive_behav ~ 1 + BinGroup*Gender + Gender*EYO + (1|Code) +(1|Site), data=d)
+dred.mmse <- d[!is.na(d$MMSE),]
+sc2.bm0.refit <- lmer(passive_behav ~ 1 + EYO + BinGroup + (1|Code), data=dred.mmse)
+sc2.bm7 <- lmer(passive_behav ~ 1 +   EYO + BinGroup + MMSE + (1|Code) , data=dred.mmse)
+
+summary(sc2.bm7)
+#model_performance(sc2.bm2)
+check_model(sc2.bm7)
+```
+
+```{r}
+anova(sc2.bm0.refit, sc2.bm7)
+Anova(sc2.bm7)
+interact_plot(sc2.bm7, pred=MMSE, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r}
+library(car)
+library(jtools)
+anova(sc2.bm0.refit, sc2.bm7)
+plot_summs(sc2.bm0, sc2.bm7, 
+             error_format = "[{conf.low}, {conf.high}]")
+export_summs(sc2.bm0, sc2.bm1, sc2.bm2, sc2.bm3, sc2.bm7,  model.names=c('sc2.bm0', 'sc2.bm1', 'sc2.bm2', 'sc2.bm3', 'sc2.bm7'),
+             error_format = "[{conf.low}, {conf.high}]")
+```
+
+```{r}
+Anova(sc2.bm0)
+```
+
+## Three Grous - bvFTD vs nfPPA+svPPA vs lvPPA:
+
+```{r}
+library(dplyr)
+dataTer = d[d$Group!="nsPPA",]
+dataTer <- dataTer %>%
+  mutate(TerGroup = case_when(
+    Group == "bvFTD" ~ 'bvFTD',
+    Group %in% c('nfPPA', 'svPPA') ~ 'PPA-FTD',
+    Group == 'lvPPA' ~ 'lvPPA'
+  ))
+dataTer$TerGroup <- factor(dataTer$TerGroup)
+summary(dataTer)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+library(lme4)
+library(car)
+library(performance)
+sc2.fm0 <- lmer(passive_behav ~ 1 + EYO + (1|Code), data=dataTer)
+summary(sc2.fm0)
+model_performance(sc2.fm0)
+check_model(sc2.fm0)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc2.fm1 <- lmer(passive_behav ~ 1 + EYO + TerGroup + (1|Code), data=dataTer)
+summary(sc2.fm1)
+model_performance(sc2.fm1)
+anova(sc2.fm0, sc2.fm1)
+check_model(sc2.fm1)
+```
+
+```{r}
+Anova(sc2.fm1)
+interact_plot(sc2.fm1, pred=EYO, modx=TerGroup, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc2.fm2 <- lmer(passive_behav ~ 1 + EYO*TerGroup + (1|Code), data=dataTer)
+summary(sc2.fm2)
+model_performance(sc2.fm2)
+anova(sc2.fm1, sc2.fm2)
+check_model(sc2.fm2)
+```
+
+```{r}
+Anova(sc2.fm2)
+interact_plot(sc2.fm2, pred=EYO, modx=TerGroup, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc2.fm3 <- lmer(passive_behav ~ 1 + EYO + TerGroup + Gender + (1|Code), data=dataTer)
+summary(sc2.fm3)
+model_performance(sc2.fm3)
+anova(sc2.fm1, sc2.fm3)
+check_model(sc2.fm3)
+```
+
+```{r}
+Anova(sc2.fm3)
+interact_plot(sc2.fm3, pred=EYO, modx=TerGroup, mod2=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+Now interactions:
+
+```{r}
+sc2.fm4 <- lmer(passive_behav ~ 1 + EYO + TerGroup*Gender + (1|Code), data=dataTer)
+sc2.fm5 <- lmer(passive_behav ~ 1 + EYO*Gender + TerGroup + (1|Code), data=dataTer)
+sc2.fm6 <- lmer(passive_behav ~ 1 + EYO*Gender + TerGroup*Gender + (1|Code), data=dataTer)
+summary(sc2.fm4)
+summary(sc2.fm5)
+summary(sc2.fm6)
+#model_performance(sc2.fm4)
+anova(sc2.fm1, sc2.fm4)
+anova(sc2.fm1, sc2.fm5)
+anova(sc2.fm4, sc2.fm5)
+anova(sc2.fm4, sc2.fm6)
+anova(sc2.fm5, sc2.fm6)
+#check_model(sc2.fm4)
+Anova(sc2.fm4)
+Anova(sc2.fm5)
+Anova(sc2.fm6)
+interact_plot(sc2.fm4, pred=EYO, modx=TerGroup, mod2=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+interact_plot(sc2.fm5, pred=EYO, modx=TerGroup, mod2=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+interact_plot(sc2.fm6, pred=EYO, modx=TerGroup, mod2=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+LEt's add covariates. is Site a random effect?
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc2.fm5 <- lmer(passive_behav ~ 1 + EYO + TerGroup + (1|Code) + (1|Site), data=dataTer)
+summary(sc2.fm5)
+model_performance(sc2.fm5)
+anova(sc2.fm1, sc2.fm5)
+check_model(sc2.fm5)
+```
+
+```{r}
+Anova(sc2.fm5)
+interact_plot(sc2.fm5, pred=EYO, modx=TerGroup, mod2=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+Site is not a random effect. Let's add education years. Not significant
+at all.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+dataTer.educ <- dataTer[!is.na(dataTer$Education),]
+sc2.fm1.refitted <- lmer(passive_behav ~ 1 + EYO + TerGroup + (1|Code), data=dataTer.educ)
+sc2.fm6 <- lmer(passive_behav ~ 1 + EYO + TerGroup + Education + (1|Code), data=dataTer.educ)
+summary(sc2.fm6)
+model_performance(sc2.fm6)
+anova(sc2.fm1.refitted, sc2.fm6)
+check_model(sc2.fm6)
+```
+
+```{r}
+Anova(sc2.fm6)
+interact_plot(sc2.fm6, pred=EYO, modx=TerGroup, mod2=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+Site is not a random effect. Let's add MMSE years. Not significant at
+all.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+dataTer.mmse <- dataTer[!is.na(dataTer$MMSE),]
+sc2.fm1.refitted <- lmer(passive_behav ~ 1 + EYO + TerGroup + (1|Code), data=dataTer.mmse)
+sc2.fm7 <- lmer(passive_behav ~ 1 + EYO + TerGroup + MMSE + (1|Code), data=dataTer.mmse)
+summary(sc2.fm7)
+model_performance(sc2.fm7)
+anova(sc2.fm1.refitted, sc2.fm7)
+check_model(sc2.fm7)
+```
+
+```{r}
+Anova(sc2.fm7)
+interact_plot(sc2.fm7, pred=MMSE, modx=TerGroup, mod2=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r}
+library(car)
+library(jtools)
+anova(sc2.fm0, sc2.fm1)
+plot_summs(sc2.fm0, sc2.fm1,sc2.fm7,  model.names=c('sc2.fm0', 'sc2.fm1', 'sc2.fm7'),
+             error_format = "[{conf.low}, {conf.high}]")
+export_summs(sc2.fm0, sc2.fm1, sc2.fm7,  model.names=c('sc2.fm0', 'sc2.fm1', 'sc2.fm7'),
+             error_format = "[{conf.low}, {conf.high}]")
+```
+
+## Four Groups - bvFTD vs lvPPA vs nfPPA vs svPPA:
+
+```{r}
+library(dplyr)
+dataQuad = d[d$Group!='nsPPA',]
+dataQuad$QuadGroup <- factor(dataQuad$Group)
+summary(dataQuad)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+library(lme4)
+library(car)
+library(performance)
+sc2.fm0 <- lmer(passive_behav ~ 1 + EYO + (1|Code), data=dataQuad)
+summary(sc2.fm0)
+model_performance(sc2.fm0)
+check_model(sc2.fm0)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc2.fm1 <- lmer(passive_behav ~ 1 + EYO + QuadGroup + (1|Code), data=dataQuad)
+summary(sc2.fm1)
+model_performance(sc2.fm1)
+anova(sc2.fm0, sc2.fm1)
+check_model(sc2.fm1)
+```
+
+```{r}
+Anova(sc2.fm1)
+interact_plot(sc2.fm1, pred=EYO, modx=QuadGroup, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc2.fm2 <- lmer(passive_behav ~ 1 + EYO*QuadGroup + (1|Code), data=dataQuad)
+summary(sc2.fm2)
+model_performance(sc2.fm2)
+anova(sc2.fm1, sc2.fm2)
+check_model(sc2.fm2)
+```
+
+```{r}
+Anova(sc2.fm2)
+interact_plot(sc2.fm2, pred=EYO, modx=QuadGroup, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc2.fm3 <- lmer(passive_behav ~ 1 + EYO + QuadGroup + Gender + (1|Code), data=dataQuad)
+summary(sc2.fm3)
+model_performance(sc2.fm3)
+anova(sc2.fm1, sc2.fm3)
+check_model(sc2.fm3)
+```
+
+```{r}
+Anova(sc2.fm3)
+interact_plot(sc2.fm3, pred=EYO, modx=QuadGroup, mod2=Gender, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r}
+sc2.fm4 <- lmer(passive_behav ~ 1 + EYO + QuadGroup:Gender + QuadGroup + Gender + (1|Code), data=dataQuad)
+sc2.fm5 <- lmer(passive_behav ~ 1 + EYO*Gender + QuadGroup + (1|Code), data=dataQuad)
+sc2.fm6 <- lmer(passive_behav ~ 1 + EYO + QuadGroup:Gender + QuadGroup + Gender + EYO:Gender + (1|Code), data=dataQuad)
+summary(sc2.fm4)
+summary(sc2.fm5)
+summary(sc2.fm6)
+#model_performance(sc2.fm4)
+anova(sc2.fm1, sc2.fm4)
+anova(sc2.fm1, sc2.fm5)
+anova(sc2.fm4, sc2.fm5)
+anova(sc2.fm4, sc2.fm6)
+anova(sc2.fm5, sc2.fm6)
+#check_model(sc2.fm4)
+Anova(sc2.fm4)
+Anova(sc2.fm5)
+Anova(sc2.fm6)
+interact_plot(sc2.fm4, pred=EYO, modx=QuadGroup, mod2=Gender, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+interact_plot(sc2.fm5, pred=EYO, modx=QuadGroup, mod2=Gender, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+interact_plot(sc2.fm6, pred=EYO, modx=QuadGroup, mod2=Gender, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+LEt's add covariates. is Site a random effect?
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc2.fm5 <- lmer(passive_behav ~ 1 + EYO + QuadGroup + (1|Code) + (1|Site), data=dataQuad)
+summary(sc2.fm5)
+model_performance(sc2.fm5)
+anova(sc2.fm1, sc2.fm5)
+check_model(sc2.fm5)
+```
+
+```{r}
+Anova(sc2.fm5)
+interact_plot(sc2.fm5, pred=EYO, modx=QuadGroup, mod2=Gender, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+Site is not a random effect. Let's add education years. Not significant
+at all.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+dataQuad.educ <- dataQuad[!is.na(dataQuad$Education),]
+sc2.fm1.refitted <- lmer(passive_behav ~ 1 + EYO + QuadGroup + (1|Code), data=dataQuad.educ)
+sc2.fm7 <- lmer(passive_behav ~ 1 + EYO + QuadGroup + Education + (1|Code), data=dataQuad.educ)
+summary(sc2.fm7)
+model_performance(sc2.fm7)
+anova(sc2.fm1.refitted, sc2.fm7)
+check_model(sc2.fm7)
+```
+
+```{r}
+Anova(sc2.fm7)
+interact_plot(sc2.fm7, pred=EYO, modx=QuadGroup, mod2=Gender, data=dataQuad.educ, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+Site is not a random effect. Let's add MMSE years. Not significant at
+all.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+dataQuad.mmse <- dataQuad[!is.na(dataQuad$MMSE),]
+sc2.fm1.refitted <- lmer(passive_behav ~ 1 + EYO + QuadGroup + (1|Code), data=dataQuad.mmse)
+sc2.fm8 <- lmer(passive_behav ~ 1 + EYO + QuadGroup + MMSE + (1|Code), data=dataQuad.mmse)
+summary(sc2.fm8)
+model_performance(sc2.fm8)
+anova(sc2.fm1.refitted, sc2.fm8)
+check_model(sc2.fm8)
+```
+
+```{r}
+Anova(sc2.fm8)
+interact_plot(sc2.fm8, pred=MMSE, modx=QuadGroup, mod2=Gender, data=dataQuad.mmse, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r}
+library(car)
+library(jtools)
+plot_summs(sc2.fm0, sc2.fm1, sc2.fm8,  model.names=c('sc2.fm0', 'sc2.fm1', 'sc2.fm8'), 
+             error_format = "[{conf.low}, {conf.high}]")
+export_summs(sc2.fm0, sc2.fm1, sc2.fm8,  model.names=c('sc2.fm0', 'sc2.fm1', 'sc2.fm8'),
+             error_format = "[{conf.low}, {conf.high}]")
+```
+
+# Affective Phenotype - Affective
+
+## Binary - bvFTD vs REST:
+
+We first build and check the baseline model:
+
+```{r Fig3, echo=TRUE, fig.height=10, fig.width=5}
+library(lme4)
+library(car)
+library(performance)
+
+sc3.bm0 <- lmer(affective ~ 1 + EYO + (1|Code), data=d)
+summary(sc3.bm0)
+model_performance(sc3.bm0)
+check_model(sc3.bm0)
+```
+
+```{r}
+sc3.bm1 <- lmer(affective ~ 1 + EYO + BinGroup + (1|Code), data=d)
+qqPlot(resid(sc3.bm1))
+anova(sc3.bm0, sc3.bm1)
+summary(sc3.bm1)
+Anova(sc3.bm1)
+interact_plot(sc3.bm1, pred=EYO, modx=BinGroup, data=d, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc3.bm2 <- lmer(affective ~ 1 + EYO + Gender + (1|Code), data=d)
+summary(sc3.bm2)
+qqPlot(resid(sc3.bm2))
+model_performance(sc3.bm2)
+check_model(sc3.bm2)
+```
+
+```{r}
+anova(sc3.bm0, sc3.bm2)
+Anova(sc3.bm2)
+interact_plot(sc3.bm2, pred=EYO, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc3.bm3 <- lmer(affective ~ 1 + EYO + Gender:EYO + (1|Code), data=d)
+summary(sc3.bm3)
+#model_performance(sc3.bm2)
+check_model(sc3.bm3)
+```
+
+```{r}
+anova(sc3.bm0, sc3.bm3)
+Anova(sc3.bm3)
+interact_plot(sc3.bm3, pred=EYO, modx=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc3.bm4 <- lmer(affective ~ 1 + BinGroup:Gender + EYO + Gender:EYO + (1|Code), data=d)
+summary(sc3.bm4)
+#model_performance(sc3.bm2)
+check_model(sc3.bm4)
+```
+
+```{r}
+anova(sc3.bm3, sc3.bm4)
+Anova(sc3.bm4)
+interact_plot(sc3.bm4, pred=EYO, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+Including the random effect of site doesn't change anything.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+#sc3.bm5 <- lmer(affective ~ 1 + BinGroup*Gender + Gender*EYO + (1|Code) +(1|Site), data=d)
+sc3.bm5 <- lmer(affective ~ 1 + EYO + BinGroup + Gender + (1|Code) +(1|Site), data=d)
+
+summary(sc3.bm5)
+#model_performance(sc3.bm2)
+check_model(sc3.bm5)
+```
+
+```{r}
+anova(sc3.bm3, sc3.bm5)
+Anova(sc3.bm5)
+interact_plot(sc3.bm5, pred=EYO, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+Education doesn't have any effect (neither over sc3.bm0 or sc3.bm0
+refitted).
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+#sc3.bm3 <- lmer(affective ~ 1 + EYO + Gender:EYO + (1|Code), data=d)
+dred.educ <- d[!is.na(d$Education),]
+sc3.bm3.refit <- lmer(affective ~ 1 + EYO + Gender:EYO +  (1|Code), data=dred.educ)
+sc3.bm6 <- lmer(affective ~ 1 + EYO + Gender:EYO + Education + (1|Code) , data=dred.educ)
+
+summary(sc3.bm6)
+#model_performance(sc3.bm2)
+check_model(sc3.bm6)
+```
+
+```{r}
+anova(sc3.bm3.refit, sc3.bm6)
+Anova(sc3.bm6)
+interact_plot(sc3.bm6, pred=Education, modx=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+We removed the MMSE, but I want to check if there's a
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+#sc3.bm5 <- lmer(affective ~ 1 + BinGroup*Gender + Gender*EYO + (1|Code) +(1|Site), data=d)
+dred.educ <- d[!is.na(d$Education),]
+sc3.bm7 <- lmer(affective ~ 1 + EYO + Gender:EYO + Education + Education:Gender + (1|Code), data=dred.educ)
+
+summary(sc3.bm7)
+#model_performance(sc3.bm2)
+check_model(sc3.bm7)
+```
+
+```{r}
+anova(sc3.bm6, sc3.bm7)
+Anova(sc3.bm7)
+interact_plot(sc3.bm7, pred=Education, modx=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r}
+library(car)
+library(jtools)
+anova(sc3.bm3.refit, sc3.bm6)
+plot_summs(sc3.bm0, sc3.bm3, sc3.bm6, model.names=c('sc3.bm0', 'sc3.bm3', 'sc3.bm6'),
+             error_format = "[{conf.low}, {conf.high}]")
+export_summs(sc3.bm0, sc3.bm3, sc3.bm6, model.names=c('sc3.bm0', 'sc3.bm3', 'sc3.bm6'),
+             error_format = "[{conf.low}, {conf.high}]")
+```
+
+## Three Grous - bvFTD vs nfPPA+svPPA vs lvPPA:
+
+```{r}
+library(dplyr)
+dataTer = d[d$Group!="nsPPA",]
+dataTer <- dataTer %>%
+  mutate(TerGroup = case_when(
+    Group == "bvFTD" ~ 'bvFTD',
+    Group %in% c('nfPPA', 'svPPA') ~ 'PPA-FTD',
+    Group == 'lvPPA' ~ 'lvPPA'
+  ))
+dataTer$TerGroup <- factor(dataTer$TerGroup)
+summary(dataTer)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+library(lme4)
+library(car)
+library(performance)
+sc3.fm0 <- lmer(affective ~ 1 + EYO + (1|Code), data=dataTer)
+summary(sc3.fm0)
+model_performance(sc3.fm0)
+check_model(sc3.fm0)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc3.fm1 <- lmer(affective ~ 1 + EYO + TerGroup + (1|Code), data=dataTer)
+summary(sc3.fm1)
+model_performance(sc3.fm1)
+anova(sc3.fm0, sc3.fm1)
+check_model(sc3.fm1)
+```
+
+```{r}
+Anova(sc3.fm1)
+interact_plot(sc3.fm1, pred=EYO, modx=TerGroup, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc3.fm2 <- lmer(affective ~ 1 + EYO*TerGroup + (1|Code), data=dataTer)
+summary(sc3.fm2)
+model_performance(sc3.fm2)
+anova(sc3.fm0, sc3.fm2)
+check_model(sc3.fm2)
+```
+
+```{r}
+Anova(sc3.fm2)
+interact_plot(sc3.fm2, pred=EYO, modx=TerGroup, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc3.fm3 <- lmer(affective ~ 1 + EYO + Gender + (1|Code), data=dataTer)
+summary(sc3.fm3)
+model_performance(sc3.fm3)
+anova(sc3.fm0, sc3.fm3)
+check_model(sc3.fm3)
+```
+
+```{r}
+Anova(sc3.fm3)
+interact_plot(sc3.fm3, pred=EYO, modx=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+Now interactions:
+
+```{r}
+sc3.fm4 <- lmer(affective ~ 1 + EYO + EYO:Gender + (1|Code), data=dataTer)
+summary(sc3.fm4)
+#model_performance(sc3.fm4)
+anova(sc3.fm0, sc3.fm4)
+#check_model(sc3.fm4)
+Anova(sc3.fm4)
+interact_plot(sc3.fm4, pred=EYO, modx=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+
+```
+
+LEt's add covariates. is Site a random effect?
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc3.fm5 <- lmer(affective ~ 1 + EYO + EYO:Gender + (1|Code) + (1|Site), data=dataTer)
+
+summary(sc3.fm5)
+model_performance(sc3.fm5)
+anova(sc3.fm4, sc3.fm5)
+check_model(sc3.fm5)
+```
+
+```{r}
+Anova(sc3.fm5)
+interact_plot(sc3.fm5, pred=EYO, modx=TerGroup, mod2=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+Site is not a random effect. Let's add education years. Not significant
+at all.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+dataTer.educ <- dataTer[!is.na(dataTer$Education),]
+sc3.fm4.refitted <- lmer(affective ~1 + EYO + EYO:Gender + (1|Code), data=dataTer.educ)
+sc3.fm6 <- lmer(affective ~ 1 + EYO + EYO:Gender + Education + (1|Code), data=dataTer.educ)
+summary(sc3.fm6)
+model_performance(sc3.fm6)
+anova(sc3.fm4.refitted, sc3.fm6)
+check_model(sc3.fm6)
+```
+
+```{r}
+Anova(sc3.fm6)
+interact_plot(sc3.fm6, pred=EYO, modx=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+Site is not a random effect. Let's add MMSE years. Not significant at
+all.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc3.fm7 <- lmer(affective ~  1 + EYO + EYO:Gender + Education + Education:Gender + (1|Code), data=dataTer.educ)
+
+summary(sc3.fm7)
+model_performance(sc3.fm7)
+anova(sc3.fm6, sc3.fm7)
+check_model(sc3.fm7)
+```
+
+```{r}
+Anova(sc3.fm7)
+interact_plot(sc3.fm7, pred=Education, modx=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r}
+library(car)
+library(jtools)
+anova(sc3.fm0, sc3.fm1)
+plot_summs(sc3.fm0, sc3.fm4,sc3.fm6,  model.names=c('sc3.fm0', 'sc3.fm4', 'sc3.fm6'),
+             error_format = "[{conf.low}, {conf.high}]")
+export_summs(sc3.fm0, sc3.fm4, sc3.fm6,  model.names=c('sc3.fm0', 'sc3.fm4', 'sc3.fm6'),
+             error_format = "[{conf.low}, {conf.high}]")
+```
+
+## Four Groups - bvFTD vs lvPPA vs nfPPA vs svPPA:
+
+```{r}
+library(dplyr)
+dataQuad = d[d$Group!='nsPPA',]
+dataQuad$QuadGroup <- factor(dataQuad$Group)
+summary(dataQuad)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+library(lme4)
+library(car)
+library(performance)
+sc3.fm0 <- lmer(affective ~ 1 + EYO + (1|Code), data=dataQuad)
+summary(sc3.fm0)
+model_performance(sc3.fm0)
+check_model(sc3.fm0)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc3.fm1 <- lmer(affective ~ 1 + EYO + QuadGroup + (1|Code), data=dataQuad)
+summary(sc3.fm1)
+model_performance(sc3.fm1)
+anova(sc3.fm0, sc3.fm1)
+check_model(sc3.fm1)
+```
+
+```{r}
+Anova(sc3.fm1)
+interact_plot(sc3.fm1, pred=EYO, modx=QuadGroup, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc3.fm2 <- lmer(affective ~ 1 + EYO*QuadGroup + (1|Code), data=dataQuad)
+summary(sc3.fm2)
+model_performance(sc3.fm2)
+anova(sc3.fm0, sc3.fm2)
+check_model(sc3.fm2)
+```
+
+```{r}
+Anova(sc3.fm2)
+interact_plot(sc3.fm2, pred=EYO, modx=QuadGroup, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc3.fm3 <- lmer(affective ~ 1 + EYO + Gender + (1|Code), data=dataQuad)
+summary(sc3.fm3)
+model_performance(sc3.fm3)
+anova(sc3.fm0, sc3.fm3)
+check_model(sc3.fm3)
+```
+
+```{r}
+Anova(sc3.fm3)
+interact_plot(sc3.fm3, pred=EYO, modx=Gender, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r}
+sc3.fm4 <- lmer(affective ~ 1 + EYO + EYO:Gender + (1|Code), data=dataQuad)
+summary(sc3.fm4)
+#model_performance(sc3.fm4)
+anova(sc3.fm0, sc3.fm4)
+#check_model(sc3.fm4)
+Anova(sc3.fm4)
+interact_plot(sc3.fm4, pred=EYO, modx=Gender, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+FROM THIS MOMENT ON IT IS THE SAME AS THE PREVIOUS ANALYSIS.
+
+# Psychotic Phenotype - Psychotic
+
+## Binary - bvFTD vs REST:
+
+We first build and check the baseline model:
+
+```{r Fig4, echo=TRUE, fig.height=10, fig.width=5}
+library(lme4)
+library(car)
+library(performance)
+d.symp = d[d$psychotic>0,]
+sc4.bm0 <- lmer(psychotic ~ 1 + EYO + (1|Code), data=d.symp)
+summary(sc4.bm0)
+Anova(sc4.bm0)
+check_model(sc4.bm0)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+library(interactions)
+library(ggplot2)
+sc4.bm1 <- lmer(psychotic ~ 1 + EYO + BinGroup + (1|Code), data=d.symp)
+summary(sc4.bm1)
+qqPlot(resid(sc4.bm1))
+Anova(sc4.bm1)
+check_model(sc4.bm1)
+```
+
+```{r}
+interact_plot(sc4.bm1, pred=EYO, modx=BinGroup, data=d.symp, interval=TRUE, plot.points=FALSE, y.label='Psychotic Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r}
+sc4.bm2 <- lmer(psychotic ~ 1 + EYO*BinGroup + (1|Code), data=d.symp)
+qqPlot(resid(sc4.bm2))
+anova(sc4.bm1, sc4.bm2)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc4.bm3 <- lmer(psychotic ~ 1 + EYO + Gender + (1|Code), data=d.symp)
+summary(sc4.bm3)
+qqPlot(resid(sc4.bm3))
+model_performance(sc4.bm3)
+check_model(sc4.bm3)
+```
+
+```{r}
+anova(sc4.bm0, sc4.bm3)
+Anova(sc4.bm3)
+interact_plot(sc4.bm3, pred=EYO, modx=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Psychotic Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc4.bm4 <- lmer(psychotic ~ 1 + EYO + Gender:EYO + (1|Code), data=d.symp)
+summary(sc4.bm4)
+#model_performance(sc4.bm2)
+check_model(sc4.bm4)
+```
+
+```{r}
+anova(sc4.bm0, sc4.bm4)
+Anova(sc4.bm4)
+interact_plot(sc4.bm4, pred=EYO, modx=Gender, data=d.symp, interval=TRUE, plot.points=FALSE, y.label='Psychotic Phenotype', rug=TRUE, jitter=1)
+```
+
+Education doesn't have any effect (neither over sc4.bm0 or sc4.bm0
+refitted).
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+#sc4.bm5 <- lmer(psychotic ~ 1 + BinGroup*Gender + Gender*EYO + (1|Code) +(1|Site), data=d)
+dred.educ <- d.symp[!is.na(d.symp$Education),]
+sc4.bm0.refit <- lmer(psychotic ~ 1 + EYO + (1|Code), data=dred.educ)
+sc4.bm6 <- lmer(psychotic ~ 1 + EYO + Education + (1|Code) , data=dred.educ)
+
+summary(sc4.bm6)
+#model_performance(sc4.bm2)
+check_model(sc4.bm6)
+```
+
+```{r}
+anova(sc4.bm0.refit, sc4.bm6)
+Anova(sc4.bm6)
+interact_plot(sc4.bm6, pred=Education, modx=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Psychotic Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r}
+library(car)
+library(jtools)
+anova(sc4.bm0, sc4.bm1)
+plot_summs(sc4.bm0, sc4.bm1,  model.names=c('sc4.bm0', 'sc4.bm1'), 
+             error_format = "[{conf.low}, {conf.high}]")
+export_summs(sc4.bm0, sc4.bm1,  model.names=c('sc4.bm0', 'sc4.bm1'),
+             error_format = "[{conf.low}, {conf.high}]")
+```
+
+## Three Grous - bvFTD vs nfPPA+svPPA vs lvPPA:
+
+```{r}
+library(dplyr)
+dataTer = d[d$Group!="nsPPA",]
+dataTer = dataTer[dataTer$psychotic>0,]
+dataTer <- dataTer %>%
+  mutate(TerGroup = case_when(
+    Group == "bvFTD" ~ 'bvFTD',
+    Group %in% c('nfPPA', 'svPPA') ~ 'PPA-FTD',
+    Group == 'lvPPA' ~ 'lvPPA'
+  ))
+dataTer$TerGroup <- factor(dataTer$TerGroup)
+summary(dataTer)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+library(lme4)
+library(car)
+library(performance)
+sc4.fm0 <- lmer(psychotic ~ 1 + EYO + (1|Code), data=dataTer)
+summary(sc4.fm0)
+model_performance(sc4.fm0)
+check_model(sc4.fm0)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc4.fm1 <- lmer(psychotic ~ 1 + EYO + TerGroup + (1|Code), data=dataTer)
+summary(sc4.fm1)
+model_performance(sc4.fm1)
+anova(sc4.fm0, sc4.fm1)
+check_model(sc4.fm1)
+```
+
+```{r}
+Anova(sc4.fm1)
+interact_plot(sc4.fm1, pred=EYO, modx=TerGroup, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Psychotic Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc4.fm2 <- lmer(psychotic ~ 1 + EYO*TerGroup + (1|Code), data=dataTer)
+summary(sc4.fm2)
+model_performance(sc4.fm2)
+anova(sc4.fm1, sc4.fm2)
+check_model(sc4.fm2)
+```
+
+```{r}
+Anova(sc4.fm2)
+interact_plot(sc4.fm2, pred=EYO, modx=TerGroup, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Psychotic Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc4.fm3 <- lmer(psychotic ~ 1 + EYO + Gender + (1|Code), data=dataTer)
+summary(sc4.fm3)
+model_performance(sc4.fm3)
+anova(sc4.fm0, sc4.fm3)
+check_model(sc4.fm3)
+```
+
+```{r}
+Anova(sc4.fm3)
+interact_plot(sc4.fm3, pred=EYO, modx=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Psychotic Phenotype', rug=TRUE, jitter=1)
+```
+
+Site is not a random effect. Let's add education years. Not significant
+at all.
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+dataTer.educ <- dataTer[!is.na(dataTer$Education),]
+sc4.fm0.refitted <- lmer(psychotic ~ 1 + EYO + (1|Code), data=dataTer.educ)
+sc4.fm6 <- lmer(psychotic ~ 1 + EYO + Education + (1|Code), data=dataTer.educ)
+summary(sc4.fm6)
+model_performance(sc4.fm6)
+anova(sc4.fm0.refitted, sc4.fm6)
+check_model(sc4.fm6)
+```
+
+```{r}
+Anova(sc4.fm6)
+interact_plot(sc4.fm6, pred=EYO, modx=Gender, data=dataTer, interval=TRUE, plot.points=FALSE, y.label='Psychotic Phenotype', rug=TRUE, jitter=1)
+```
+
+## Four Groups - bvFTD vs lvPPA vs nfPPA vs svPPA:
+
+```{r}
+library(dplyr)
+dataQuad = d[d$Group!='nsPPA',]
+dataQuad = dataQuad[dataQuad$psychotic>0,]
+dataQuad$QuadGroup <- factor(dataQuad$Group)
+summary(dataQuad)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+library(lme4)
+library(car)
+library(performance)
+sc4.fm0 <- lmer(psychotic ~ 1 + EYO + (1|Code), data=dataQuad)
+summary(sc4.fm0)
+model_performance(sc4.fm0)
+check_model(sc4.fm0)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc4.fm1 <- lmer(psychotic ~ 1 + EYO + QuadGroup + (1|Code), data=dataQuad)
+summary(sc4.fm1)
+model_performance(sc4.fm1)
+anova(sc4.fm0, sc4.fm1)
+check_model(sc4.fm1)
+```
+
+```{r}
+Anova(sc4.fm1)
+interact_plot(sc4.fm1, pred=EYO, modx=QuadGroup, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Psychotic Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc4.fm2 <- lmer(psychotic ~ 1 + EYO*QuadGroup + (1|Code), data=dataQuad)
+summary(sc4.fm2)
+model_performance(sc4.fm2)
+anova(sc4.fm1, sc4.fm2)
+check_model(sc4.fm2)
+```
+
+```{r}
+Anova(sc4.fm2)
+interact_plot(sc4.fm2, pred=EYO, modx=QuadGroup, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Psychotic Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+sc4.fm3 <- lmer(psychotic ~ 1 + EYO + Gender + (1|Code), data=dataQuad)
+summary(sc4.fm3)
+model_performance(sc4.fm3)
+anova(sc4.fm0, sc4.fm3)
+check_model(sc4.fm3)
+```
+
+```{r}
+Anova(sc4.fm3)
+interact_plot(sc4.fm3, pred=EYO, modx=Gender, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Psychotic Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r echo=TRUE, fig.height=10, fig.width=5}
+dataQuad.educ <- dataQuad[!is.na(dataQuad$Education),]
+sc4.fm1.refitted <- lmer(psychotic ~ 1 + EYO  + (1|Code), data=dataQuad.educ)
+sc4.fm7 <- lmer(psychotic ~ 1 + EYO + Education + (1|Code), data=dataQuad.educ)
+summary(sc4.fm7)
+model_performance(sc4.fm7)
+anova(sc4.fm1.refitted, sc4.fm7)
+check_model(sc4.fm7)
+```
+
+```{r}
+Anova(sc4.fm7)
+interact_plot(sc4.fm7, pred=Education, modx=Gender, data=dataQuad.educ, interval=TRUE, plot.points=FALSE, y.label='Psychotic Phenotype', rug=TRUE, jitter=1)
+```
+
+```{r}
+library(car)
+library(jtools)
+plot_summs(sc4.fm0, sc4.fm1, sc4.fm3,  model.names=c('sc4.fm0', 'sc4.fm1', 'sc4.fm3'), 
+             error_format = "[{conf.low}, {conf.high}]")
+export_summs(sc4.fm0, sc4.fm1, sc4.fm3,  model.names=c('sc4.fm0', 'sc4.fm2', 'sc4.fm3'),
+             error_format = "[{conf.low}, {conf.high}]")
+```
+
+# Definitive Models
+
+```{r}
+library(lme4)
+library(car)
+library(performance)
+library(car)
+library(jtools)
+# Refit data
+# Data ternary
+dataTer = d[d$Group!="nsPPA",]
+dataTer$original_group <- dataTer$Group
+dataTer <- dataTer %>%
+  mutate(TerGroup = case_when(
+    Group == "bvFTD" ~ 'bvFTD',
+    Group %in% c('nfPPA', 'svPPA') ~ 'PPA-FTD',
+    Group == 'lvPPA' ~ 'lvPPA'
+  ))
+dataTer$TerGroup <- factor(dataTer$TerGroup)
+dataTer$Group <- factor(dataTer$TerGroup)
+dataTer.educ <- dataTer[!is.na(dataTer$Education),]
+
+# Data quaternary 
+dataQuad = d[d$Group!='nsPPA',]
+dataQuad$original_group <- dataQuad$Group
+dataQuad$QuadGroup <- factor(dataQuad$Group)
+dataQuad$Group <- factor(dataQuad$QuadGroup)
+```
+
+```{r}
+sc1.fm4 <- lmer(active_behav ~ 1 + EYO + Group:Gender + Group + Gender + (1|Code), data=dataQuad)
+summ(sc1.fm4)
+```
+
+```{r}
+sc2.fm1 <- lmer(passive_behav ~ 1 + EYO + Group + (1|Code), data=dataQuad)
+summ(sc2.fm1)
+```
+
+```{r}
+sc3.fm6 <- lmer(affective ~ 1 + EYO + EYO:Gender + Education + (1|Code), data=dataTer.educ)
+summ(sc3.fm6)
+```
+
+```{r}
+export_summs(sc1.fm4, sc2.fm1, sc3.fm6, model.names=c('sc1.fm4', 'sc2.fm1', 'sc3.fm6'),
+             error_format = "p={p.value} [{conf.low}, {conf.high}]", number_format = 3)
+```
+
+## Figures
+
+```{r}
+interact_plot(sc1.fm4, pred=EYO, modx=Group, mod2=Gender, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Affecttive Behavioural Phenotype', rug=TRUE, jitter=1)
+interact_plot(sc2.fm1, pred=EYO, modx=Group, data=dataQuad, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+interact_plot(sc3.fm6, pred=EYO, modx=Gender, data=dataTer.educ, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+
+## N-way Significance testing with Monte Carlo simulations
+
+A N-way empirical significance was estimated from a Monte-Carlo
+sampling of the models for each sum score every 1 years in the EYO range
+from -0 to 16 in order to identify each sign’s degree of
+differentiation. First we load the packages used for sampling:
+
+And we perform the following: Do the three-way empirical p-value:
+
+$$P(A-B)>0$$
+
+where A and B are:
+
+$$A = dens(SIM\_FAC_i)$$
+
+
+the probability mass of the sampling from the LME model.
+
+```{r}
+library(effects)
+
+plot_effect <- function(model, title, transform, main.effect="Group", ylims=c(-1, 15), eyo_basis=seq(from=0, to=15, by=1),
+                        co.effect=NULL,
+                        colors=c("bvFTD" = "#49b7fc", "lvPPA" = "#f38000", "nfPPA"="#59d796", "svPPA"="#ff0083")){
+  effects <- c(main.effect, "EYO")
+  if (!is.null(co.effect)) {
+    # Concatenate co.effect to the effects list
+    effects <- c(effects, co.effect)
+  }
+  ee<-Effect(effects, model, partial.residuals=T, xlevels=list(EYO=eyo_basis))
+  theme_set(theme_light())
+  eetac <- as.data.frame(ee)
+  levels.d <- levels(factor(unique(eetac[[main.effect]])))
+  eetac[c("fit", "se", "lower","upper")] <- transform(eetac[c("fit", "se", "lower","upper")])
+  jarl <- matrix(eetac[['lower']], length(eetac[['lower']])/length(levels.d), length(levels.d), byrow=T)
+  jarl.df = list()
+  for (i in 1:length(levels.d)){
+    jarl.df[[levels.d[i]]] <- jarl[,i]
+  }
+  #jarl.df <- as.data.frame(jarl.df, col.names=names(jarl.df))<0
+  #jarl.df <- cbind(unique(eetac['EYO']),jarl.df)
+  #max.bvFTD <- tail(jarl.df[max(which(jarl.df$bvFTD > 0)), 'EYO'], 1)
+  #max.lvPPA <- tail(jarl.df[max(which(jarl.df$lvPPA > 0)), 'EYO'], 1)
+  #max.nfPPA <- tail(jarl.df[max(which(jarl.df$nfPPA > 0)), 'EYO'], 1)
+  #max.svPPA <- tail(jarl.df[max(which(jarl.df$svPPA > 0)), 'EYO'], 1)
+  tacmpfig <- ggplot(eetac,
+          aes_string("EYO", "fit", colour=main.effect, fill=main.effect))+
+      geom_line(size=1)+
+       ## colour=NA suppresses edges of the ribbon
+      geom_ribbon(colour=NA,alpha=0.1,
+                              aes(ymin=lower,ymax=upper))+
+       ## add rug plot based on original data
+       geom_rug(aes_string(x="EYO",y=ee$response), data=ee$data, sides="b", position='jitter')+ 
+    coord_cartesian(ylim=ylims)+labs(title=title, y='Sum score magnitude', x='Estimated Years to Symptom Onset (EYO)')+
+    #geom_vline(aes(xintercept = max.bvFTD), color = "#49b7fc", linetype='dashed')+
+    #geom_vline(aes(xintercept = max.nfPPA), color = "#59d796", linetype='dashed')+ 
+    #geom_vline(aes(xintercept = max.lvPPA), color = "#f38000", linetype='dashed')+ 
+    #geom_vline(aes(xintercept = max.svPPA), color = "#ff0083", linetype='dashed')+
+    scale_colour_manual(values = colors)+
+    scale_fill_manual(values = colors)
+  if (!is.null(co.effect)) {
+    # Add faceting based on the co.effect variable
+    tacmpfig <- tacmpfig + facet_wrap(as.formula(paste("~", co.effect)))
+  }
+  return(tacmpfig)
+}
+```
+
+
+```{r}
+get_preds <- function(model, data, transform, main.effect="Group", eyo_basis=seq(from=0, to=15, by=1), N=1e4 ) {
+  eyo_seq = rep(eyo_basis, N)
+  totsample <- length(eyo_basis)*N # cuidao
+  levels = levels(data[[main.effect]])
+  Ngroups = length(levels)
+  ncols=length(eyo_basis)
+  # co-variates
+  #Gender = factor(rep("m", N), levels=levels(data$Gender))
+  if (main.effect=='Group'){
+    Gender = sample(data$Gender, N, replace=TRUE)
+  }else if (main.effect=='Gender'){
+    Group = sample(data$Group, N, replace=TRUE)
+  }
+  code = sample(data$Code, N, replace=TRUE)
+  bs = sample(sort(data$Site)[1:50], N, replace=TRUE)
+  edu = sample(data$Education, N, replace=TRUE)
+  
+  results = list()
+  for (i in 1:Ngroups) {
+    newdata <- data.frame(EYO=eyo_seq, Code=code, Site=bs, Education=edu)
+    newdata[[main.effect]] = factor(rep(levels[i], N), levels=levels)
+    if (main.effect=='Group'){
+      newdata$Gender = sample(data$Gender, N, replace=TRUE)
+    }else if (main.effect=='Gender'){
+      newdata$Group = sample(data$Group, N, replace=TRUE)
+    }
+    regular <- predict(model, newdata=newdata, re.form=(~0), allow.new.levels=TRUE)
+    results[[levels[i]]] <- matrix(transform(regular), N, ncols, byrow=T)
+  }
+  
+  return(results)
+}
+
+unlog <- function(x){
+  return(10^x -1)
+}
+
+iident <- function(x){
+  return(x)
+}
+
+plot_preds <- function(preds, eyo_basis=seq(from=-40, to=20, by=5), N=1e4, ylim=c(-5,15), title='', colors=c('red', 'blue', 'green', 'violet'), PIrange=.95){
+  ncols=length(eyo_basis)
+  levels <- names(preds)
+  eyo_seq <- rep(eyo_basis, N)
+  eyo_matrix_form <- matrix(eyo_seq, N, ncols, byrow=TRUE)
+  plot(NULL, xlim=c(min(eyo_basis), max(eyo_basis)), ylim=ylim, ylab=title, xlab='EYO')
+  for (i in 1:length(preds)) {
+    res <- preds[[levels[i]]]
+    preds_mu <- apply(res, 2, mean)
+    lines(eyo_matrix_form[1,], preds_mu, col=colors[i])
+    preds_PI <- apply(rescaler.data.frame, 2, PI, PIrange)
+    shade(preds_PI, eyo_matrix_form[1,], col=col.alpha(colors[i], .2))
+    preds_PI_66 <- apply(res, 2, PI, .66)
+    shade(preds_PI_66, eyo_matrix_form[1,], col=col.alpha(colors[i], .2))
+  }
+  legend("topleft", legend = levels,
+               text.width = strwidth("1,000,000"),
+               title = "Groups")
+}
+
+
+nwayttest <- function(preds, N=1e4){
+  final <- data.frame(EYO=eyo_basis)
+  levels <- names(preds)
+  combinations <- t(combn(levels,2))
+  for (i in 1:length(combinations[,1])) {
+    com <- combinations[i,]
+    comName <- paste(com[1], '.vs.', com[2], sep='')
+    dd <- c()
+    for (col in 1:length(eyo_basis)){
+      sd.1 <- max(sd(preds[[com[1]]][,col]), 0.05)
+      sd.2 <- max(sd(preds[[com[2]]][,col]), 0.05)
+      d.1 <- rnorm(N, mean(preds[[com[1]]][,col]), sd.1)
+      d.2 <- rnorm(N, mean(preds[[com[2]]][,col]), sd.2)
+      val <- min(sum(d.1<d.2), sum(d.1>d.2))
+      dd <- c(dd, (val+1)/(N+1))
+    }
+    final[[comName]] <- round(dd*N)/N
+  }
+  return(final)
+}
+```
+
+### Active Behavioural Phenotype
+
+```{r}
+eyo_basis <- seq(from=0, to=15, by=1)
+# N=1e4
+# res <- get_preds(sc1.fm4, dataQuad, iident, eyo_basis=eyo_basis, N=N)
+# kbl(nwayttest(res), booktabs = T, caption="p-values (four-way hypothesis testing) for the pairwise comparison between groups at each EYO (LMM - Active Behavioural phenotype)") %>%
+# kable_styling(latex_options = c("striped", "scale_down"))
+# 
+# res2 <- get_preds(sc1.fm4, dataQuad, iident, eyo_basis=eyo_basis, main.effect="Gender", N=N)
+# kbl(nwayttest(res2), booktabs = T, caption="p-values (four-way hypothesis testing) for the pairwise comparison between Gender at each EYO (LMM - Active Behavioural phenotype)") %>%
+# kable_styling(latex_options = c("striped"))
+
+plot_effect(sc1.fm4, transform=iident, main.effect="Group", co.effect="Gender", title='Active Behavioural phenotype', ylims=c(-1, 5), eyo_basis=eyo_basis)
+```
+With emmeans: 
+
+```{r}
+library(emmeans)
+library(dplyr)
+library(tidyr)
+emmip(sc1.fm4, Group ~ Gender)
+Anova(sc1.fm4)
+
+#EMM = emmeans(sc1.fm4,  pairwise ~ Gender*Group | EYO)#, at=list(EYO=seq(from=0, to=15, by=1)))
+# xprt = print(pairs(EMM), export = TRUE)
+# create a pairwise contrast and export to variable in data.frame form: 
+EMM <- emmeans(sc1.fm4, specs=c('Group', 'EYO'), at=list(EYO=eyo_basis))
+xprt <- as.data.frame(contrast(EMM, method='pairwise', simple='Group'))
+kbl(xprt %>% pivot_wider(id_cols=EYO, names_from=c('contrast'), values_from='p.value'), booktabs = T, caption="p-values (four-way hypothesis testing) for the pairwise comparison between groups at each EYO (LMM - Active Behavioural phenotype)")%>%
+kable_styling(latex_options = c("striped", "scale_down"))
+#xprt <- print(contrast(EMM, method='pairwise', simple='Group'), export=TRUE)
+
+
+EMM <- emmeans(sc1.fm4, specs=c('Group', 'Gender', 'EYO'), at=list(EYO=eyo_basis))
+xprt <- as.data.frame(contrast(EMM, method='pairwise', simple='Group'))
+kbl(xprt %>% pivot_wider(id_cols=EYO, names_from=c('contrast', 'Gender'), values_from='p.value'), booktabs = T, caption="p-values (four-way hypothesis testing) for the pairwise comparison between combinations of Group/Gender at each EYO (LMM - Active Behavioural phenotype)")%>%
+kable_styling(latex_options = c("striped", "scale_down"))
+#xprt <- summary(EMM)
+#t(xprt$contrasts %>% pivot_wider(names_from=EYO, values_from='p.value'))
+#kbl(t(xprt$contrasts %>% pivot_wider(names_from=EYO, values_from=c("p.value"))))
+
+#kbl(xprt$summary, booktabs = T, caption="p-values (four-way hypothesis testing) for the pairwise comparison between groups at each EYO (LMM - Active Behavioural phenotype)") %>%
+#kable_styling(latex_options = c("striped", "scale_down"))
+#emmip(sc1.fm4, Group ~ EYO | Gender, mult.name = "Group", cov.reduce = FALSE, CIs=TRUE)
+
+```
+#### Contrasts
+```{r}
+# sc1.fm4 <- lmer(active_behav ~ 1 + EYO + Group:Gender + Group + Gender + (1|Code), data=dataQuad)
+joint_tests(sc1.fm4)
+emmip(sc1.fm4, Group ~ Gender)
+```
+
+```{r}
+
+EMM <- emmeans(sc1.fm4, ~ factor(Group)*factor(Gender), at=list(EYO=eyo_basis))
+pairs(EMM, simple = "Group")    # compare treats for each dose -- "simple effects"
+pairs(EMM, simple = "Gender")     # compare doses for each treat
+eff_size(EMM, sigma = sigma(sc1.fm4), edf = df.residual(sc1.fm4))
+plot(EMM, comparisons = TRUE)
+
+```
+
+Degrees-of-freedom method: kenward-roger 
+P value adjustment: tukey method for comparing a family of 4 estimates 
+
+### Passive Behavioural Phenotype
+```{r}
+eyo_basis <- seq(from=0, to=15, by=1)
+#N=1e4
+#res <- get_preds(sc2.fm1, dataQuad, iident,  eyo_basis=eyo_basis, N=N)
+#kbl(nwayttest(res), booktabs = T, caption="p-values (four-way hypothesis testing) for the pairwise comparison between groups at each EYO (LMM - Passive Behavioural phenotype)") %>%
+#kable_styling(latex_options = c("striped", "scale_down"))
+plot_effect(sc2.fm1, transform=iident, title='Passive Behavioural phenotype', ylims=c(-1, 5), eyo_basis=eyo_basis)
+```
+#### Contrasts
+```{r}
+# sc2.fm1 <- lmer(passive_behav ~ 1 + EYO + Group + (1|Code), data=dataQuad)
+joint_tests(sc2.fm1)
+emmip(sc2.fm1, Group ~ EYO, at=list(EYO=eyo_basis))
+```
+
+```{r}
+
+EMM <- emmeans(sc2.fm1, ~ factor(Group) + EYO)
+pairs(EMM, simple = "Group")    # compare treats for each dose -- "simple effects"
+pairs(EMM, simple = "EYO")     # compare doses for each treat
+eff_size(EMM, sigma = sigma(sc1.fm4), edf = df.residual(sc1.fm4))
+plot(EMM, comparisons = TRUE)
+
+#emtrends(sc1.fm4, pairwise ~ factor(Group), var = "EYO")
+```
+
+```{r}
+emmip(sc2.fm1, Group ~ EYO, at=list(EYO=0:15), CIs=TRUE)
+Anova(sc2.fm1)
+
+# create a pairwise contrast and export to variable in data.frame form: 
+EMM <- emmeans(sc2.fm1, specs=c('Group', 'EYO'), at=list(EYO=eyo_basis))
+xprt <- as.data.frame(contrast(EMM, method='pairwise', simple='Group'))
+kbl(xprt %>% pivot_wider(id_cols=EYO, names_from=c('contrast'), values_from='p.value'), booktabs = T, caption="p-values (four-way hypothesis testing) for the pairwise comparison between groups at each EYO (LMM - Passive Behavioural phenotype)") %>%
+kable_styling(latex_options = c("striped", "scale_down"))
+
+```
+
+### Affective Phenotype
+```{r}
+eyo_basis <- seq(from=0, to=15, by=1)
+N=1e4
+# res <- get_preds(sc3.fm6, dataTer.educ, iident, main.effect="Gender", eyo_basis=eyo_basis, N=N)
+# kbl(nwayttest(res), booktabs = T, caption="p-values (four-way hypothesis testing) for the pairwise comparison between groups at each EYO (LMM - Affective phenotype)")
+plot_effect(sc3.fm6, main.effect="Gender", transform=iident, title='Affective phenotype', ylims=c(-1, 5), eyo_basis=eyo_basis, colors=c('f'="#49b7fc", "m" = "#f38000"))
+```
+
+```{r}
+emmip(sc3.fm6, EYO ~ Gender)
+Anova(sc3.fm6)
+
+#EMM = emmeans(sc1.fm4,  pairwise ~ Gender*Group | EYO)#, at=list(EYO=seq(from=0, to=15, by=1)))
+# xprt = print(pairs(EMM), export = TRUE)
+# create a pairwise contrast and export to variable in data.frame form: 
+EMM <- emmeans(sc3.fm6, specs=c('Gender', 'EYO', 'Education'), at=list(EYO=1:15), nesting = NULL )
+xprt <- as.data.frame(contrast(EMM, method='pairwise', simple='Gender'))
+kbl(xprt %>% pivot_wider(id_cols=EYO, names_from=c('contrast'), values_from='p.value'), booktabs = T, caption="p-values (four-way hypothesis testing) for the pairwise comparison between groups at each EYO (LMM - Affective phenotype)")%>%
+kable_styling(latex_options = c("striped"))
+
+```
+
+#### Contrasts
+```{r}
+# sc3.fm6 <- lmer(affective ~ 1 + EYO + EYO:Gender + Education + (1|Code), data=dataTer.educ)
+joint_tests(sc3.fm6)
+emmip(sc3.fm6, Gender ~ EYO, cov.reduce = range)
+```
+
+```{r}
+# When a covariate and a factor interact, we typically don’t want EMMs themselves, but rather estimates of slopes of the covariate trend for each level of the factor. 
+trends <- emtrends(sc3.fm6, pairwise ~ Gender:EYO + EYO + Education, var = "EYO")
+summary(trends) 
+
+#EMM <- emmeans(sc3.fm6, ".", at=list(Gender=c('m', 'f'), EYO=seq(from=0, to=10)))
+#contrast(EMM, "consec", simple = "each", combine = TRUE)
+#pairs(EMM, simple = "Gender")    # compare treats for each dose -- "simple effects"
+#eff_size(EMM, sigma = sigma(sc3.fm6), edf = df.residual(sc3.fm6))
+#plot(EMM, comparisons = TRUE)
+```
+# Binary Definitive Models
+
+```{r}
+library(lme4)
+library(car)
+library(performance)
+library(car)
+library(jtools)
+# Refit data
+# Data ternary
+```
+
+```{r}
+sc1.bm2 <- lmer(active_behav ~ 1 + EYO + BinGroup + Gender + (1|Code), data=d)
+summ(sc1.bm2)
+```
+
+```{r}
+sc2.bm0 <- lmer(passive_behav ~ 1 + EYO + BinGroup + (1|Code), data=d)
+summ(sc2.bm0)
+```
+
+```{r}
+dred.educ <- d[!is.na(d$Education),]
+sc3.bm6 <- lmer(affective ~ 1 + EYO + Gender:EYO + Education + (1|Code) , data=dred.educ)
+summ(sc3.bm6)
+```
+
+```{r}
+export_summs(sc1.bm2, sc2.bm0, sc3.bm6, model.names=c('sc1.bm2', 'sc2.bm0', 'sc3.bm6'),
+             error_format = "p={p.value} [{conf.low}, {conf.high}]", number_format = 3)
+```
+
+## Figures
+
+```{r}
+interact_plot(sc1.bm2, pred=EYO, modx=BinGroup, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Active Behavioural Phenotype', rug=TRUE, jitter=1)
+interact_plot(sc2.bm0, pred=EYO, modx=BinGroup, data=d, interval=TRUE, plot.points=FALSE, y.label='Passive Behavioural Phenotype', rug=TRUE, jitter=1)
+interact_plot(sc3.fm6, pred=EYO, modx=Education, mod2=Gender, data=d, interval=TRUE, plot.points=FALSE, y.label='Affective Phenotype', rug=TRUE, jitter=1)
+```
+## Contrasts
+
+```{r}
+eyo_basis <- seq(from=0, to=15, by=1)
+```
+
+### Active Behavioural Phenotype 
+
+
+
+# Bibliography
+```{r}
+library(report)
+
+cite_packages()
+```
